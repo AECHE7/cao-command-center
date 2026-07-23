@@ -75,6 +75,7 @@ body{ font-family:'Inter',sans-serif; }
     <button data-tab="leaderboard" onclick="switchTab('leaderboard')" class="tab-btn tab-off px-4 py-3 text-xs font-bold rounded-t-lg whitespace-nowrap flex items-center gap-1.5"><i class="ph-bold ph-trophy"></i> Leaderboard</button>
     <button data-tab="tasks"       onclick="switchTab('tasks')"       class="tab-btn tab-off px-4 py-3 text-xs font-bold rounded-t-lg whitespace-nowrap flex items-center gap-1.5"><i class="ph-bold ph-list-checks"></i> Tasks</button>
     <button data-tab="excuses"     onclick="switchTab('excuses')"     class="tab-btn tab-off px-4 py-3 text-xs font-bold rounded-t-lg whitespace-nowrap flex items-center gap-1.5"><i class="ph-bold ph-note-pencil"></i> Excuses</button>
+    <button data-tab="notify"      onclick="switchTab('notify')"      class="tab-btn tab-off px-4 py-3 text-xs font-bold rounded-t-lg whitespace-nowrap flex items-center gap-1.5"><i class="ph-bold ph-bell"></i> Notify</button>
     <button data-tab="export"      onclick="switchTab('export')"      class="tab-btn tab-off px-4 py-3 text-xs font-bold rounded-t-lg whitespace-nowrap flex items-center gap-1.5"><i class="ph-bold ph-download-simple"></i> Export</button>
   </nav>
 
@@ -85,6 +86,7 @@ body{ font-family:'Inter',sans-serif; }
     <div id="panel-leaderboard" class="hidden"></div>
     <div id="panel-tasks" class="hidden"></div>
     <div id="panel-excuses" class="hidden"></div>
+    <div id="panel-notify" class="hidden"></div>
     <div id="panel-export" class="hidden"></div>
   </main>
 </div>
@@ -147,7 +149,7 @@ function switchTab(tab){
     const on = b.dataset.tab === tab;
     b.className = "tab-btn " + (on?'tab-on':'tab-off') + " px-4 py-3 text-xs font-bold rounded-t-lg whitespace-nowrap flex items-center gap-1.5";
   });
-  ['overview','roster','absentees','leaderboard','tasks','excuses','export'].forEach(t=>{
+  ['overview','roster','absentees','leaderboard','tasks','excuses','notify','export'].forEach(t=>{
     document.getElementById('panel-'+t).classList.toggle('hidden', t!==tab);
   });
   if (!loaded[tab]) reloadActive();
@@ -161,6 +163,7 @@ function reloadActive(){
   if (activeTab==='leaderboard') loadLeaderboard().finally?.(done); else
   if (activeTab==='tasks') loadTasks().finally?.(done); else
   if (activeTab==='excuses') loadExcuses().finally?.(done); else
+  if (activeTab==='notify') loadNotify().finally?.(done); else
   if (activeTab==='export') { renderExportForm(); done(); }
 }
 function skeleton(el, n){
@@ -530,6 +533,54 @@ async function reviewExcuse(excuseId, decision, btn){
   const data = await api('adminReviewExcuse', { excuseId, decision });
   if (data.success){ loadExcuses(); loaded.absentees = false; }
   else { btn.disabled = false; btn.innerText = decision==='approve'?'Approve':'Deny'; }
+}
+
+/* ═══ NOTIFY (config view + announcement) ═══ */
+async function loadNotify(){
+  skeleton('panel-notify', 3);
+  const data = await api('adminNotifyConfig');
+  if (data.error){ document.getElementById('panel-notify').innerHTML = errBox(data.message); return; }
+  populateGroups(data.groups); renderNotify(data); loaded.notify = true;
+}
+function renderNotify(d){
+  const groupOpts = (d.groups||['All Groups']).map(g=>`<option>${g}</option>`).join('');
+  const configRows = d.rows.length ? d.rows.map(r=>`
+    <div class="p-3 flex items-center justify-between text-xs border-b border-slate-800/50 last:border-0">
+      <div><p class="font-bold text-slate-200">${r.group}</p><p class="text-[10px] text-slate-500">${r.emails.length} email(s)${r.active.toLowerCase()==='n'?' · inactive':''}</p></div>
+      <span class="text-[9px] font-mono text-slate-500">${r.emails.join(', ')||'—'}</span>
+    </div>`).join('') :
+    `<p class="text-xs text-slate-600 text-center py-5">No "Notify Config" sheet rows found yet — add one per group with officer emails.</p>`;
+
+  document.getElementById('panel-notify').innerHTML = `
+    <div class="grid gap-4">
+      <div class="bg-slate-900/80 border border-slate-800 rounded-3xl p-5">
+        <h3 class="text-xs font-bold text-clsu-gold uppercase tracking-wider mb-3 flex items-center gap-2"><i class="ph-bold ph-megaphone"></i> Send announcement</h3>
+        <div class="space-y-2">
+          <select id="an-group" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-clsu-gold">${groupOpts}</select>
+          <input id="an-subject" placeholder="Subject" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-clsu-gold">
+          <textarea id="an-message" rows="4" placeholder="Message to members…" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-clsu-gold resize-none"></textarea>
+          <button onclick="sendAnnouncement(this)" class="w-full bg-clsu-green hover:bg-green-800 text-white font-bold py-2.5 rounded-xl text-xs">Send to group</button>
+          <p id="an-msg" class="text-[11px] text-center"></p>
+          <p class="text-[10px] text-slate-500">Sent as one BCC email — members won't see each other's addresses. Opted-out members are skipped.</p>
+        </div>
+      </div>
+
+      <div class="bg-slate-900/80 border border-slate-800 rounded-3xl overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800"><h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2"><i class="ph-bold ph-users-three"></i> Officer routing (Notify Config)</h3></div>
+        ${configRows}
+      </div>
+    </div>`;
+}
+async function sendAnnouncement(btn){
+  const subject = document.getElementById('an-subject').value.trim();
+  const message = document.getElementById('an-message').value.trim();
+  const msg = document.getElementById('an-msg');
+  if (!subject || !message){ msg.innerHTML = '<span class="text-rose-400">Subject and message are required.</span>'; return; }
+  btn.disabled = true; btn.innerText = 'Sending…';
+  const data = await api('adminSendAnnouncement', { group: document.getElementById('an-group').value, subject, message });
+  btn.disabled = false; btn.innerText = 'Send to group';
+  if (data.success){ msg.innerHTML = `<span class="text-emerald-400">${data.message}</span>`; document.getElementById('an-subject').value=''; document.getElementById('an-message').value=''; }
+  else msg.innerHTML = `<span class="text-rose-400">${data.message||'Failed to send.'}</span>`;
 }
 
 
